@@ -5,8 +5,8 @@
 #include <Update.h>
 
 // ===== إعدادات GitHub =====
-const char* version_file_url = "https://raw.githubusercontent.com/USERNAME/REPO/main/version.txt";
-const char* firmware_url     = "https://raw.githubusercontent.com/USERNAME/REPO/main/firmware.bin";
+const char* version_file_url = "https://raw.githubusercontent.com/amer-maher/wifi-smart/main/version.txt";
+const char* firmware_url     = "https://raw.githubusercontent.com/amer-maher/wifi-smart/main/wifi.ino.bin";
 
 // النسخة الحالية للجهاز
 const char* CURRENT_VERSION = "1.0";
