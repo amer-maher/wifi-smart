@@ -1,76 +1,96 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <Update.h>
+#include <PubSubClient.h>
+#include <WiFiClientSecure.h>
 
-// ===== إعدادات GitHub =====
-const char* version_file_url = "https://raw.githubusercontent.com/amer-maher/wifi-smart/main/version.txt";
-const char* firmware_url     = "https://raw.githubusercontent.com/amer-maher/wifi-smart/main/wifi.ino.bin";
-
-// النسخة الحالية للجهاز
-const char* CURRENT_VERSION = "1.0";
-
-// ===== WiFi Manager =====
+// ===== إعدادات WiFi و MQTT =====
 WiFiManager wm;
+const char* mqtt_server = "192.168.1.14"; // عدّل حسب سيرفرك
+const char* mqtt_topic = "esp32/update";
+WiFiClient espClient;
+PubSubClient client(espClient);
 
-// ==================== دوال ====================
+// ===== روابط الملفات =====
+const char* version_file_url = "https://raw.githubusercontent.com/amer-maher/wifi-smart/main/version.txt";
+const char* firmware_url = "https://github.com/amer-maher/wifi-smart/releases/download/mqqt/wifi.ino.bin"; 
 
-// جلب النسخة الجديدة من GitHub
-String getRemoteVersion(const char* url) {
-  WiFiClientSecure client;
-  client.setInsecure(); // لتخطي شهادة SSL أثناء الاختبار
+// النسخة الحالية
+String CURRENT_VERSION = "1.0";
+
+// ===== دوال =====
+void reconnectMQTT() {
+  while (!client.connected()) {
+    if (client.connect("ESP32Client")) {
+      Serial.println("MQTT connected");
+    } else {
+      Serial.print("Failed MQTT, rc=");
+      Serial.print(client.state());
+      delay(1000);
+    }
+  }
+}
+
+String getRemoteVersion() {
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure(); // تجاهل التحقق من الشهادة
   HTTPClient http;
-  http.begin(client, url);
-
+  http.begin(secureClient, version_file_url);
   int httpCode = http.GET();
   String payload = "";
   if (httpCode == 200) {
     payload = http.getString();
     payload.trim();
-    Serial.print("Fetched remote version: ");
-    Serial.println(payload);
+    Serial.println("Fetched remote version: " + payload);
   } else {
     Serial.printf("Failed to get version, HTTP code: %d\n", httpCode);
   }
-
   http.end();
   return payload;
 }
 
-// تنفيذ التحديث OTA
-void performUpdate(const char* url) {
-  WiFiClientSecure client;
-  client.setInsecure();
+void performOTA() {
+  Serial.println("Starting OTA...");
+
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+
   HTTPClient http;
-  http.begin(client, url);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);   // مهم جدا
+  http.begin(secureClient, firmware_url);
 
   int httpCode = http.GET();
+
   if (httpCode == 200) {
     int contentLength = http.getSize();
-    Serial.printf("Firmware size: %d bytes\n", contentLength);
 
     if (Update.begin(contentLength)) {
-      WiFiClient* stream = http.getStreamPtr();
+      WiFiClient * stream = http.getStreamPtr();
+
       size_t written = Update.writeStream(*stream);
 
-      if (written == contentLength) Serial.println("Firmware written successfully.");
-      else Serial.println("Written size mismatch!");
+      if (written == contentLength) {
+        Serial.println("Firmware written successfully");
+      } else {
+        Serial.println("Written size mismatch!");
+      }
 
       if (Update.end()) {
         if (Update.isFinished()) {
           Serial.println("OTA finished successfully. Rebooting...");
-          delay(2000);
           ESP.restart();
         } else {
-          Serial.println("OTA not finished. Something went wrong.");
+          Serial.println("OTA not finished.");
         }
       } else {
-        Serial.printf("OTA error: %s\n", Update.errorString());
+        Serial.printf("OTA failed. Error: %s\n", Update.errorString());
       }
+
     } else {
-      Serial.println("Not enough space for OTA!");
+      Serial.println("Not enough space for OTA");
     }
+
   } else {
     Serial.printf("HTTP error while downloading firmware: %d\n", httpCode);
   }
@@ -78,41 +98,45 @@ void performUpdate(const char* url) {
   http.end();
 }
 
-// ==================== setup ====================
+
+// ===== setup =====
 void setup() {
   Serial.begin(115200);
-  delay(2000);
-  Serial.println("ESP32 booting...");
+  delay(1000);
 
-  // اتصال بالواي فاي
+  // الاتصال بالواي فاي
   if (!wm.autoConnect("ESP32-Setup", "12345678")) {
     Serial.println("Failed to connect WiFi, restarting...");
     ESP.restart();
   }
-  Serial.println("Connected to WiFi!");
-  Serial.print("IP address: ");
+
+  Serial.println("Connected!");
   Serial.println(WiFi.localIP());
 
-  // جلب النسخة الجديدة
-  String remoteVersion = getRemoteVersion(version_file_url);
-  Serial.print("Current version: ");
-  Serial.println(CURRENT_VERSION);
-  Serial.print("Remote version: ");
-  Serial.println(remoteVersion);
+  // الاتصال بـ MQTT
+  client.setServer(mqtt_server, 1883);
+  reconnectMQTT();
+  client.publish(mqtt_topic, "test...");
 
-  // مقارنة النسخ وتنفيذ التحديث
+  // تحقق من النسخة
+  String remoteVersion = getRemoteVersion();
+  Serial.println("Current version: " + CURRENT_VERSION);
+  Serial.println("Remote version: " + remoteVersion);
+
   if (remoteVersion != "" && remoteVersion != CURRENT_VERSION) {
     Serial.println("New version available! Starting OTA...");
-    performUpdate(firmware_url);
+    client.publish(mqtt_topic, "New version available! Starting OTA...");
+    performOTA();
   } else {
     Serial.println("No update needed. Running current version.");
+    client.publish(mqtt_topic, "No update needed. Running current version.");
   }
 }
 
-// ==================== loop ====================
+// ===== loop =====
 void loop() {
-  // ضع هنا كود الجهاز العادي
-  // مثال تجريبي لطباعة كل 5 ثواني
-  Serial.println("Device running...");
-  delay(5000);
+  if (!client.connected()) reconnectMQTT();
+  client.loop();
+
+  // هنا ضع كود الجهاز العادي
 }
